@@ -9,7 +9,10 @@ from PySide6.QtWidgets import (
     QLabel, QHeaderView, QMenu, QFrame, QApplication
 )
 from PySide6.QtCore import Qt, QItemSelection, QModelIndex
-from PySide6.QtGui import QDragEnterEvent, QDropEvent, QIcon, QAction, QClipboard
+from PySide6.QtGui import (
+    QDragEnterEvent, QDragMoveEvent, QDropEvent, QIcon, QAction, QClipboard,
+    QKeySequence, QShortcut
+)
 
 from core.models import AnalysisResult, TrackInfo
 from core.metadata import SUPPORTED_EXTENSIONS
@@ -21,28 +24,50 @@ from gui.widgets.filter_bar import FilterBar
 from exporters.report_exporter import export_to_csv, export_to_json, export_to_html
 
 
-def reveal_in_explorer(target_path: Path):
-    """Opens Windows Explorer and reveals the target file or folder."""
+def reveal_in_file_manager(target_path: Path):
+    """
+    Opens the native file manager (Finder on macOS, File Explorer on Windows,
+    or default file manager on Linux) and reveals the target file or folder.
+    """
     target_path = Path(target_path).resolve()
     try:
-        if target_path.is_file() and target_path.exists():
-            subprocess.Popen(["explorer", f"/select,{target_path}"])
-        elif target_path.is_dir() and target_path.exists():
-            subprocess.Popen(["explorer", str(target_path)])
-        elif target_path.parent.exists():
-            subprocess.Popen(["explorer", str(target_path.parent)])
+        if sys.platform == "darwin":
+            # macOS: 'open -R <path>' selects and reveals the file in Finder
+            if target_path.is_file() and target_path.exists():
+                subprocess.Popen(["open", "-R", str(target_path)])
+            elif target_path.is_dir() and target_path.exists():
+                subprocess.Popen(["open", str(target_path)])
+            elif target_path.parent.exists():
+                subprocess.Popen(["open", str(target_path.parent)])
+        elif sys.platform.startswith("win"):
+            # Windows: 'explorer /select,<path>' selects and highlights the file
+            if target_path.is_file() and target_path.exists():
+                subprocess.Popen(["explorer", f"/select,{target_path}"])
+            elif target_path.is_dir() and target_path.exists():
+                subprocess.Popen(["explorer", str(target_path)])
+            elif target_path.parent.exists():
+                subprocess.Popen(["explorer", str(target_path.parent)])
+        else:
+            # Linux / Unix
+            folder = target_path if target_path.is_dir() else target_path.parent
+            if folder.exists():
+                subprocess.Popen(["xdg-open", str(folder)])
     except Exception as e:
-        print(f"Error opening Explorer for {target_path}: {e}")
+        print(f"Error opening file manager for {target_path}: {e}")
+
+
+# Backwards compatibility alias
+reveal_in_explorer = reveal_in_file_manager
 
 
 class MainWindow(QMainWindow):
     """
-    Main Application Window for Fakin' The Funk Audio Quality Inspector.
+    Main Application Window for Audio Quality Inspector.
     """
 
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Fakin' The Funk — Fake Audio & Bitrate Quality Inspector")
+        self.setWindowTitle("Audio Quality Inspector")
         self.resize(1280, 840)
         self.setAcceptDrops(True)
 
@@ -93,8 +118,14 @@ class MainWindow(QMainWindow):
         # Dedicated "Go to Folder" Toolbar Button
         self.btn_go_to_folder = QPushButton("📁  Go to Folder")
         self.btn_go_to_folder.setEnabled(False)
-        self.btn_go_to_folder.setToolTip("Open the folder of the selected file in Windows Explorer (Ctrl+O)")
+        fm_name = "Finder" if sys.platform == "darwin" else ("File Explorer" if sys.platform.startswith("win") else "File Manager")
+        shortcut_label = "⌘O" if sys.platform == "darwin" else "Ctrl+O"
+        self.btn_go_to_folder.setToolTip(f"Open the folder of the selected file in {fm_name} ({shortcut_label})")
         self.btn_go_to_folder.clicked.connect(self._on_go_to_folder)
+
+        # Keyboard shortcut for Go to Folder (Cmd+O on macOS, Ctrl+O on Windows/Linux)
+        self.shortcut_go_folder = QShortcut(QKeySequence("Ctrl+O"), self)
+        self.shortcut_go_folder.activated.connect(self._on_go_to_folder)
 
         # Export Report Button
         self.btn_export = QPushButton("📊  Export Report ▼")
@@ -247,7 +278,6 @@ class MainWindow(QMainWindow):
             }
             QWidget {
                 color: #e1e3e6;
-                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
                 font-size: 12px;
             }
             QPushButton {
@@ -456,18 +486,18 @@ class MainWindow(QMainWindow):
             )
 
     def _on_go_to_folder(self):
-        """Action to reveal the selected file or folder in Windows Explorer."""
+        """Action to reveal the selected file or folder in native file manager."""
         if self.selected_file_path and self.selected_file_path.exists():
-            reveal_in_explorer(self.selected_file_path)
+            reveal_in_file_manager(self.selected_file_path)
         elif self.selected_folder_path and self.selected_folder_path.exists():
-            reveal_in_explorer(self.selected_folder_path)
+            reveal_in_file_manager(self.selected_folder_path)
 
     def _on_item_double_clicked(self, proxy_index: QModelIndex):
-        """Double clicking a track row reveals it in File Explorer."""
+        """Double clicking a track row reveals it in native file manager."""
         source_index = self.proxy_model.mapToSource(proxy_index)
         node = source_index.internalPointer()
         if isinstance(node, TrackNode):
-            reveal_in_explorer(node.result.track_info.file_path)
+            reveal_in_file_manager(node.result.track_info.file_path)
 
     def _on_tree_context_menu(self, pos):
         """Right-click context menu with Go to Folder and copy actions."""
@@ -480,7 +510,8 @@ class MainWindow(QMainWindow):
 
         menu = QMenu(self)
 
-        action_go_folder = menu.addAction("📁  Go to Folder (Reveal in Explorer)")
+        fm_name = "Finder" if sys.platform == "darwin" else ("File Explorer" if sys.platform.startswith("win") else "File Manager")
+        action_go_folder = menu.addAction(f"📁  Go to Folder (Reveal in {fm_name})")
         menu.addSeparator()
         action_copy_path = menu.addAction("📋  Copy File Path")
         action_copy_dir = menu.addAction("📂  Copy Folder Path")
@@ -550,6 +581,10 @@ class MainWindow(QMainWindow):
     # --- Drag & Drop ---
 
     def dragEnterEvent(self, event: QDragEnterEvent):
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+
+    def dragMoveEvent(self, event: QDragMoveEvent):
         if event.mimeData().hasUrls():
             event.acceptProposedAction()
 
