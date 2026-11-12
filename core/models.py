@@ -58,3 +58,5 @@ class AnalysisResult:
     scan_mode: str  # "fast" or "deep"
     spectrogram: Optional[SpectrogramData] = None
     error_message: Optional[str] = None
+    has_brickwall: bool = False
+    cliff_slope_db_per_khz: float = 0.0
